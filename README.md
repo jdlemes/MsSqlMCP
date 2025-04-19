@@ -1,7 +1,12 @@
 # MsSqlMCP
 MCP to query SQL Server database schema, such as tables, columns, and relationships
 
-To configure Copilot in Visual Code, add the MCP server configuration to the `settings.json` file:
+## Prerequisites:
+- .NET 9
+- SQL
+
+## Configuration
+To configure Copilot in Visual Studio Code, add the MCP server configuration to the `settings.json` file:
 
 ```json
 "mcp": {
