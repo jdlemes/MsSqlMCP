@@ -8,32 +8,52 @@ using System.Text;
 [McpServerToolType]
 public static class SchemaTool
 {
-
-    [McpServerTool, Description("Get tables name of database")]
-    public async static Task<string> GetTables()
+    // Helper method to sanitize database name to prevent SQL injection.
+    // For SQL Server, names can be enclosed in []. This also escapes any existing ] characters.
+    private static string SanitizeDatabaseName(string databaseName)
     {
-        var (connectionString, warning) = Program.GetConnectionString();
-        using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync();
-        SchemaHelper schemaHelper = new SchemaHelper();
-        var tables = await schemaHelper.GetTablesAsync(connection);
-        return $"Tables in the database:\n\n{string.Join("\n", tables)}";
-
+        return $"[{databaseName.Replace("]", "]]")}]";
     }
 
-    [McpServerTool, Description("Get the columns (fields) of a database table")]
-    public async static Task<string> GetColumns(string tableName)
+    [McpServerTool, Description("Get tables name of database. Optionally, specify a database name to query a different database in the same instance.")]
+    public async static Task<string> GetTables(string? databaseName = null)
     {
         var (connectionString, warning) = Program.GetConnectionString();
         using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync();
+
+        if (!string.IsNullOrWhiteSpace(databaseName))
+        {
+            using var useDbCommand = new SqlCommand($"USE {SanitizeDatabaseName(databaseName)};", connection);
+            await useDbCommand.ExecuteNonQueryAsync();
+        }
+
         SchemaHelper schemaHelper = new SchemaHelper();
-        // Extract the table name from the query
-        tableName = schemaHelper.ExtractTableName(tableName);
+        var tables = await schemaHelper.GetTablesAsync(connection);
+        string dbInfo = string.IsNullOrWhiteSpace(databaseName) ? string.Empty : $" in database '{databaseName}'";
+        return $"Tables{dbInfo}:\n\n{string.Join("\n", tables)}";
+    }
+
+    [McpServerTool, Description("Get the columns (fields) of a database table. Optionally, specify a database name to query a different database in the same instance.")]
+    public async static Task<string> GetColumns(string tableName, string? databaseName = null)
+    {
+        var (connectionString, warning) = Program.GetConnectionString();
+        using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+
+        if (!string.IsNullOrWhiteSpace(databaseName))
+        {
+            using var useDbCommand = new SqlCommand($"USE {SanitizeDatabaseName(databaseName)};", connection);
+            await useDbCommand.ExecuteNonQueryAsync();
+        }
+
+        SchemaHelper schemaHelper = new SchemaHelper();
+        tableName = schemaHelper.ExtractTableName(tableName); 
         if (!string.IsNullOrEmpty(tableName))
         {
             var columns = await schemaHelper.GetColumnsAsync(connection, tableName);
-            return $"Columns in the table {tableName}:\n\n{string.Join("\n", columns)}";
+            string dbInfo = string.IsNullOrWhiteSpace(databaseName) ? string.Empty : $" (database '{databaseName}')";
+            return $"Columns in the table {tableName}{dbInfo}:\n\n{string.Join("\n", columns)}";
         }
         else
         {
@@ -41,34 +61,40 @@ public static class SchemaTool
         }
     }
 
-    [McpServerTool, Description("Get the relationships between tables in the database")]
-    public async static Task<string> GetRelationships()
+    [McpServerTool, Description("Get the relationships between tables in the database. Optionally, specify a database name to query a different database in the same instance.")]
+    public async static Task<string> GetRelationships(string? databaseName = null)
     {
         var (connectionString, warning) = Program.GetConnectionString();
         using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync();
-        SchemaHelper schemaHelper = new SchemaHelper();
 
+        if (!string.IsNullOrWhiteSpace(databaseName))
+        {
+            using var useDbCommand = new SqlCommand($"USE {SanitizeDatabaseName(databaseName)};", connection);
+            await useDbCommand.ExecuteNonQueryAsync();
+        }
+
+        SchemaHelper schemaHelper = new SchemaHelper();
         var relationships = await schemaHelper.GetRelationshipsAsync(connection);
-            return $"Relationships between tables:\n\n{string.Join("\n", relationships)}";
+        string dbInfo = string.IsNullOrWhiteSpace(databaseName) ? string.Empty : $" in database '{databaseName}'";
+        return $"Relationships between tables{dbInfo}:\n\n{string.Join("\n", relationships)}";
     }
 
-    [McpServerTool, Description("Execute a SQL query against the database. Does not allow DROP statements.")]
-    public async static Task<string> ExecuteSql(string sqlQuery)
+    [McpServerTool, Description("Execute a SQL query against the database. Does not allow DROP statements. Optionally, specify a database name to query a different database in the same instance.")]
+    public async static Task<string> ExecuteSql(string sqlQuery, string? databaseName = null)
     {
         if (string.IsNullOrWhiteSpace(sqlQuery))
         {
             return "SQL query cannot be empty.";
         }
 
-        // Validate against DROP statements (case-insensitive)
         if (sqlQuery.Trim().ToUpperInvariant().StartsWith("DROP "))
         {
             return "Error: DROP statements are not allowed.";
         }
 
-        var (connectionString, warning) = Program.GetConnectionString();
-        if (warning)
+        var (connectionString, warningFlag) = Program.GetConnectionString(); 
+        if (warningFlag)
         {
             // Potentially log the warning or handle it as needed
         }
@@ -79,9 +105,15 @@ public static class SchemaTool
         {
             using var connection = new SqlConnection(connectionString);
             await connection.OpenAsync();
-            using var command = new SqlCommand(sqlQuery, connection);
 
-            // Distinguish between queries that return data (SELECT) and those that don't (INSERT, UPDATE, DELETE)
+            if (!string.IsNullOrWhiteSpace(databaseName))
+            {
+                using var useDbCommand = new SqlCommand($"USE {SanitizeDatabaseName(databaseName)};", connection);
+                await useDbCommand.ExecuteNonQueryAsync();
+                resultBuilder.AppendLine($"Switched to database '{SanitizeDatabaseName(databaseName)}'."); // Show sanitized name for clarity
+            }
+
+            using var command = new SqlCommand(sqlQuery, connection);
             bool isSelectQuery = sqlQuery.Trim().ToUpperInvariant().StartsWith("SELECT");
 
             if (isSelectQuery)
@@ -89,16 +121,20 @@ public static class SchemaTool
                 using var reader = await command.ExecuteReaderAsync();
                 if (reader.HasRows)
                 {
-                    // Column Headers
                     for (int i = 0; i < reader.FieldCount; i++)
                     {
                         resultBuilder.Append(reader.GetName(i));
                         if (i < reader.FieldCount - 1) resultBuilder.Append("\t|\t");
                     }
                     resultBuilder.AppendLine();
-                    resultBuilder.AppendLine(new string('-', resultBuilder.Length > 1 ? resultBuilder.Length -2 : 0)); // Separator line, ensure not negative
+                    // Ensure separator line is not drawn if resultBuilder is empty or too short
+                    if (resultBuilder.Length > 2) 
+                    {
+                        resultBuilder.AppendLine(new string('-', resultBuilder.Length - (resultBuilder.ToString().EndsWith(Environment.NewLine) ? Environment.NewLine.Length*2 : Environment.NewLine.Length) )); 
+                    } else if (resultBuilder.Length > 0 && !resultBuilder.ToString().EndsWith(Environment.NewLine)) {
+                        resultBuilder.AppendLine(new string('-', resultBuilder.Length));
+                    }
 
-                    // Data Rows
                     while (await reader.ReadAsync())
                     {
                         for (int i = 0; i < reader.FieldCount; i++)
@@ -114,7 +150,7 @@ public static class SchemaTool
                     resultBuilder.AppendLine("No rows returned from the query.");
                 }
             }
-            else // For INSERT, UPDATE, DELETE, etc.
+            else
             {
                 int affectedRows = await command.ExecuteNonQueryAsync();
                 resultBuilder.AppendLine($"Command executed successfully. {affectedRows} row(s) affected.");
