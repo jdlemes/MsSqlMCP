@@ -127,10 +127,12 @@ namespace MsSqlMCP.Helpers
 
             return relationships;
         }
+        
+        
 
         public string ExtractTableName(string query)
         {
-            
+
             var words = query.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
             for (int i = 0; i < words.Length; i++)
             {
@@ -144,6 +146,28 @@ namespace MsSqlMCP.Helpers
                 }
             }
             return string.Empty;
+        }
+
+        public async Task<List<string>> GetStoreProcedureAsync(SqlConnection connection, string spName)
+        {
+            var procedures = new List<string>();
+
+            string sql = @"select name, object_definition(object_id) 
+                        from sys.procedures
+                        where name = @spName;";
+
+            using var command = new SqlCommand(sql, connection);
+            command.Parameters.AddWithValue("@spName", spName);
+            using var reader = await command.ExecuteReaderAsync();
+
+            while (await reader.ReadAsync())
+            {
+                string name = reader.GetString(0);
+                string definition = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+                procedures.Add($"{name}:\n{definition}");
+            }
+
+            return procedures;
         }
 
     }

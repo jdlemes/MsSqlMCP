@@ -167,4 +167,32 @@ public static class SchemaTool
 
         return resultBuilder.ToString();
     }
+
+    [McpServerTool, Description("Get the definition of a stored procedure by name. Optionally, specify a database name to query a different database in the same instance.")]
+    public async static Task<string> GetStoreProcedure(string spName, string? databaseName = null)
+    {
+        if (string.IsNullOrWhiteSpace(spName))
+        {
+            return "Stored procedure name cannot be empty.";
+        }
+
+        var (connectionString, warning) = Program.GetConnectionString();
+        using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+
+        if (!string.IsNullOrWhiteSpace(databaseName))
+        {
+            using var useDbCommand = new SqlCommand($"USE {SanitizeDatabaseName(databaseName)};", connection);
+            await useDbCommand.ExecuteNonQueryAsync();
+        }
+
+        SchemaHelper schemaHelper = new SchemaHelper();
+        var procedures = await schemaHelper.GetStoreProcedureAsync(connection, spName);
+        string dbInfo = string.IsNullOrWhiteSpace(databaseName) ? string.Empty : $" in database '{databaseName}'";
+        if (procedures.Count == 0)
+        {
+            return $"Stored procedure '{spName}' not found{dbInfo}.";
+        }
+        return $"Stored procedure '{spName}'{dbInfo}:\n\n{string.Join("\n\n", procedures)}";
+    }
 }
