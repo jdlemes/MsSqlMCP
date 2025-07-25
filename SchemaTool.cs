@@ -80,7 +80,7 @@ public static class SchemaTool
         return $"Relationships between tables{dbInfo}:\n\n{string.Join("\n", relationships)}";
     }
 
-    [McpServerTool, Description("Execute a SQL query against the database. Does not allow DROP statements. Optionally, specify a database name to query a different database in the same instance.")]
+    [McpServerTool, Description("Execute a SQL query against the database. Only allows SELECT statements and other read-only operations. Optionally, specify a database name to query a different database in the same instance.")]
     public async static Task<string> ExecuteSql(string sqlQuery, string? databaseName = null)
     {
         if (string.IsNullOrWhiteSpace(sqlQuery))
@@ -88,9 +88,39 @@ public static class SchemaTool
             return "SQL query cannot be empty.";
         }
 
-        if (sqlQuery.Trim().ToUpperInvariant().StartsWith("DROP "))
+        // Block any statements that can modify data or structure
+        string normalizedQuery = sqlQuery.Trim().ToUpperInvariant();
+        string[] forbiddenStatements = { 
+            "DROP ", "INSERT ", "UPDATE ", "DELETE ", "TRUNCATE ", "ALTER ", "CREATE ", 
+            "EXEC ", "EXECUTE ", "MERGE ", "BULK ", "BACKUP ", "RESTORE ", "DBCC ",
+            "GRANT ", "DENY ", "REVOKE ", "USE ", "SHUTDOWN ", "KILL ", "RECONFIGURE "
+        };
+        
+        foreach (string forbidden in forbiddenStatements)
         {
-            return "Error: DROP statements are not allowed.";
+            if (normalizedQuery.StartsWith(forbidden))
+            {
+                return $"Error: {forbidden.Trim()} statements are not allowed. Only read-only operations are permitted.";
+            }
+        }
+
+        // Additional check for multi-statement queries that might contain forbidden operations
+        if (normalizedQuery.Contains(";"))
+        {
+            string[] statements = sqlQuery.Split(';', StringSplitOptions.RemoveEmptyEntries);
+            foreach (string statement in statements)
+            {
+                string normalizedStatement = statement.Trim().ToUpperInvariant();
+                if (string.IsNullOrWhiteSpace(normalizedStatement)) continue;
+                
+                foreach (string forbidden in forbiddenStatements)
+                {
+                    if (normalizedStatement.StartsWith(forbidden))
+                    {
+                        return $"Error: {forbidden.Trim()} statements are not allowed in multi-statement queries. Only read-only operations are permitted.";
+                    }
+                }
+            }
         }
 
         var (connectionString, warningFlag) = Program.GetConnectionString(); 
