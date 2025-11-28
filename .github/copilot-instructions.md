@@ -1,90 +1,140 @@
-# MsSqlMCP - AI Coding Agent Instructions
+# MsSqlMCP - Copilot Instructions
 
 ## Project Overview
-MsSqlMCP is a Model Context Protocol (MCP) server that provides SQL Server database schema exploration tools for AI agents. It exposes database metadata through MCP tools that can be called by AI assistants.
+This is a **Model Context Protocol (MCP) server** that exposes SQL Server database schema inspection tools to AI assistants. It uses the `ModelContextProtocol` SDK with stdio transport for MCP protocol communication.
 
-## Architecture & Key Components
+**IMPORTANT: This is a READ-ONLY server.** The `ExecuteSql` tool only allows SELECT queries. All modifying statements (INSERT, UPDATE, DELETE, DROP, etc.) are blocked by the `ReadOnlySqlQueryValidator`.
 
-### Core Pattern: MCP Tool Registration
-- Tools are defined as static methods in `SchemaTool.cs` decorated with `[McpServerTool]`
-- Each tool method is automatically registered via `WithToolsFromAssembly()` in `Program.cs`
-- Tools follow async pattern: `public async static Task<string> ToolName(params)`
+### Architecture Pattern
+- **Entry point**: `Program.cs` uses top-level statements with `Host.CreateApplicationBuilder`
+- **Tool registration**: Tools are defined in `SchemaTool.cs` with `[McpServerTool]` attributes
+- **Dependency Injection**: Services are registered directly in Program.cs
+- **Interfaces**: Located in `Interfaces/` folder for SOLID compliance
+- **Services**: Located in `Services/` folder with implementations
+- **Transport**: Stdio transport using `AddMcpServer().WithStdioServerTransport().WithToolsFromAssembly()`
 
-### Database Connection Strategy
-- Connection string loaded from `appsettings.json` via `Program.GetConnectionString()`
-- Always use `using var connection = new SqlConnection(connectionString)` pattern
-- Database switching handled via `USE {SanitizeDatabaseName(databaseName)}` commands
-- **Critical**: All database names must be sanitized using `SanitizeDatabaseName()` to prevent SQL injection
-
-### Helper Layer Pattern
-- `SchemaHelper.cs` contains all SQL queries and data access logic
-- Tools in `SchemaTool.cs` handle MCP concerns (connection, database switching, formatting)
-- Separation: SchemaTool = MCP interface, SchemaHelper = data access
-
-## Development Workflows
-
-### Adding New MCP Tools
-1. Add method to `SchemaTool.cs` with `[McpServerTool, Description("...")]`
-2. Implement data access method in `SchemaHelper.cs`
-3. Follow connection pattern: open connection, switch database if needed, call helper
-4. Return formatted string (not JSON) - MCP handles serialization
-
-### Running & Testing
-```bash
-dotnet run --project MsSqlMCP.csproj
+### Project Structure
 ```
-- Configure in VS Code `settings.json` under `"mcp"` section
-- Test via Copilot chat which calls the MCP tools
+MsSqlMCP/
+├── Program.cs                    # Entry point with DI configuration (top-level statements)
+├── SchemaTool.cs                 # MCP tool definitions
+├── Interfaces/
+│   ├── IConnectionFactory.cs     # SQL connection abstraction
+│   ├── IQueryExecutor.cs         # Query execution abstraction
+│   ├── ISchemaRepository.cs      # Schema queries abstraction
+│   └── ISqlQueryValidator.cs     # Query validation abstraction
+├── Services/
+│   ├── SqlConnectionFactory.cs   # Connection management
+│   ├── SafeQueryExecutor.cs      # Validated query execution
+│   ├── SchemaRepository.cs       # Schema query implementation
+│   └── ReadOnlySqlQueryValidator.cs # Security validation
+└── Tests/
+    └── ReadOnlySqlQueryValidatorTests.cs # Security tests (42 tests)
+```
 
-### Configuration
-- Database connection in `appsettings.json` under `ConnectionStrings.DefaultConnection`
-- Supports Windows Authentication (`Trusted_Connection=True`) and SQL auth
-- `appsettings.json` copied to output directory via `.csproj` configuration
+## Key Conventions
 
-## Code Conventions
-
-### SQL Injection Prevention
-- **Always** use `SanitizeDatabaseName()` for dynamic database names
-- Use parameterized queries (`@parameter`) for user input in SchemaHelper
-- Example: `command.Parameters.AddWithValue("@tableName", tableName)`
-
-### SQL Query Restrictions
-- `ExecuteSql` only allows read-only operations (SELECT, SHOW, DESCRIBE, etc.)
-- Blocked statements: DROP, INSERT, UPDATE, DELETE, TRUNCATE, ALTER, CREATE, EXEC, EXECUTE, MERGE, BULK, BACKUP, RESTORE, DBCC, GRANT, DENY, REVOKE, USE, SHUTDOWN, KILL, RECONFIGURE
-- Multi-statement queries are validated to prevent restriction bypass
-- This ensures the tool remains a safe schema exploration utility
-
-### Error Handling Pattern
+### Dependency Injection Pattern
+All services are registered in `Program.cs`:
 ```csharp
-try {
-    // SQL operations
-} catch (SqlException ex) {
-    return $"SQL Error: {ex.Message}";
-} catch (Exception ex) {
-    return $"Error: {ex.Message}";
+builder.Services.AddSingleton<IConnectionFactory, SqlConnectionFactory>();
+builder.Services.AddSingleton<ISqlQueryValidator, ReadOnlySqlQueryValidator>();
+builder.Services.AddScoped<ISchemaRepository, SchemaRepository>();
+builder.Services.AddScoped<IQueryExecutor, SafeQueryExecutor>();
+builder.Services.AddScoped<SchemaTool>();
+```
+
+### Tool Definition Pattern
+Tools in `SchemaTool.cs` use constructor injection:
+```csharp
+[McpServerToolType]
+public class SchemaTool
+{
+    private readonly ISchemaRepository _schemaRepository;
+    private readonly IQueryExecutor _queryExecutor;
+
+    public SchemaTool(ISchemaRepository schemaRepository, IQueryExecutor queryExecutor)
+    {
+        _schemaRepository = schemaRepository;
+        _queryExecutor = queryExecutor;
+    }
+
+    [McpServerTool, Description("Tool description for AI")]
+    public async Task<string> ToolName(string? databaseName = null)
+    {
+        // Use injected services
+    }
 }
 ```
 
-### Query Result Formatting
-- Tables: `schema.tablename` format
-- Columns: `name | datatype(length) | NULL/NOT NULL IDENTITY PRIMARY KEY`
-- Relationships: `table.column -> referenced_table.referenced_column (FK: name)`
+### Security: Read-Only Query Validation
+The `ReadOnlySqlQueryValidator` enforces read-only access by:
+1. **Whitelist approach**: Only queries starting with `SELECT` or `WITH` are allowed
+2. **Blocked keywords**: INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, EXEC, TRUNCATE, MERGE, etc.
+3. **Multiple statement detection**: Prevents SQL injection via semicolons
 
-## Key Dependencies
-- `ModelContextProtocol` (v0.1.0-preview.9): Core MCP framework
-- `Microsoft.Data.SqlClient`: SQL Server connectivity
-- `Microsoft.Extensions.Hosting`: Dependency injection and configuration
+### Database Name Security
+`SqlConnectionFactory.SanitizeDatabaseName()` prevents SQL injection:
+- Wraps database names in `[]` brackets
+- Escapes internal `]` characters as `]]`
 
-## Schema Query Patterns
-- Use `INFORMATION_SCHEMA` views for portable metadata queries
-- Use `sys.*` views for SQL Server-specific features (foreign keys, procedures)
-- Always include schema prefix in table references
-- Order results consistently for predictable output
+### Optional Database Parameter
+All tools accept `string? databaseName = null` to query different databases in the same SQL Server instance.
 
-## Security Considerations
-- All data-modifying statements explicitly blocked in `ExecuteSql`: DROP, INSERT, UPDATE, DELETE, TRUNCATE, ALTER, CREATE, EXEC/EXECUTE, MERGE, BULK, BACKUP, RESTORE, DBCC, GRANT, DENY, REVOKE, USE, SHUTDOWN, KILL, RECONFIGURE
-- Multi-statement queries are validated to prevent bypassing restrictions
-- Database name sanitization prevents injection
-- Connection string supports both Windows and SQL authentication
-- Only read-only operations permitted - this is a schema exploration tool only
-- No direct file system access - database operations only
+### Configuration Pattern
+Connection string is loaded from `appsettings.json` via IConfiguration:
+```json
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Data Source=(local);Initial Catalog=ia_oc;..."
+  }
+}
+```
+
+## Development Workflows
+
+### Building and Running
+```bash
+# Run the MCP server (stdio mode)
+dotnet run
+
+# Run tests (filter required due to shared project)
+dotnet test --filter "FullyQualifiedName~Tests"
+```
+
+### VS Code MCP Integration
+Configure in `settings.json`:
+```json
+"mcp": {
+  "servers": {
+    "MsSqlMCP": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": ["run", "--project", "c:\\path\\to\\MsSqlMCP.csproj"]
+    }
+  }
+}
+```
+
+### Adding New Tools
+1. Add async method to `SchemaTool` class
+2. Decorate with `[McpServerTool, Description("...")]`
+3. Use injected services (avoid creating dependencies with `new`)
+4. Accept `string? databaseName = null` for consistency
+5. Return `Task<string>` (MCP requirement)
+
+### Adding New Services
+1. Create interface in `Interfaces/` folder
+2. Create implementation in `Services/` folder
+3. Register in `Program.cs`
+4. Inject via constructor in consuming classes
+
+### Logging
+All logs go to **stderr** via `LogToStandardErrorThreshold = LogLevel.Trace` to avoid polluting stdio transport.
+
+## Dependencies
+- **Microsoft.Data.SqlClient 6.0.1**: SQL Server connectivity
+- **ModelContextProtocol 0.4.0-preview.1**: MCP SDK
+- **ModelContextProtocol.AspNetCore 0.4.0-preview.1**: MCP ASP.NET Core integration
+- **xUnit 2.9.2**: Unit testing framework
+- **.NET 9.0**: Target framework

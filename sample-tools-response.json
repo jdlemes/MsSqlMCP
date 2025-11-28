@@ -1,0 +1,74 @@
+[
+  {
+    "name": "GetTables",
+    "description": "Get tables name of database. Optionally, specify a database name to query a different database in the same instance.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "databaseName": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "GetColumns",
+    "description": "Get the columns (fields) of a database table. Optionally, specify a database name to query a different database in the same instance.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tableName": {
+          "type": "string"
+        },
+        "databaseName": {
+          "type": "string"
+        }
+      },
+      "required": ["tableName"]
+    }
+  },
+  {
+    "name": "GetRelationships",
+    "description": "Get the relationships between tables in the database. Optionally, specify a database name to query a different database in the same instance.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "databaseName": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "ExecuteSql",
+    "description": "Execute a SQL query against the database. Does not allow DROP statements. Optionally, specify a database name to query a different database in the same instance.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "sqlQuery": {
+          "type": "string"
+        },
+        "databaseName": {
+          "type": "string"
+        }
+      },
+      "required": ["sqlQuery"]
+    }
+  },
+  {
+    "name": "GetStoreProcedure",
+    "description": "Get the definition of a stored procedure by name. Optionally, specify a database name to query a different database in the same instance.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "spName": {
+          "type": "string"
+        },
+        "databaseName": {
+          "type": "string"
+        }
+      },
+      "required": ["spName"]
+    }
+  }
+]
